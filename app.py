@@ -15,8 +15,8 @@ from google.genai import types
 
 from pcap_parser import parse_pcap, serialize_transactions_for_rag
 
-# Load environment variables from .env if present
-load_dotenv()
+# Load environment variables from .env if present (force reload to pick up changes)
+load_dotenv(override=True)
 
 # ---------------------------------------------------------
 # Streamlit Page Setup
@@ -153,21 +153,24 @@ with st.sidebar:
 
     # 2. Gemini API Configuration
     st.subheader("🤖 Gemini AI Configuration")
-    default_key = os.environ.get("GEMINI_API_KEY", "")
+    load_dotenv(override=True)
+    env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    
     api_key_input = st.text_input(
         "Gemini API Key",
-        value=default_key,
+        value=env_key,
         type="password",
-        help="Enter your Google Gemini API Key. Can also be set via GEMINI_API_KEY env var."
+        help="Enter your Google Gemini API Key. Loaded automatically from .env if present."
     )
     model_choice = st.selectbox(
         "Model",
-        ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"],
+        ["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
         index=0
     )
 
-    if api_key_input:
-        st.success("API Key detected", icon="🔑")
+    effective_key = api_key_input.strip() if api_key_input.strip() else env_key
+    if effective_key:
+        st.success("API Key active", icon="🔑")
     else:
         st.warning("Enter Gemini API key to enable AI Q&A", icon="⚠️")
 
@@ -461,8 +464,8 @@ if user_query:
     with st.chat_message("user"):
         st.markdown(user_query)
 
-    # Check for API Key
-    effective_key = api_key_input or os.environ.get("GEMINI_API_KEY", "")
+    # Check for API Key (from text box or from .env)
+    effective_key = api_key_input.strip() if api_key_input.strip() else os.environ.get("GEMINI_API_KEY", "").strip()
     if not effective_key:
         err_msg = "⚠️ **Gemini API Key Missing:** Please provide your API key in the sidebar to run AI queries."
         st.session_state["chat_messages"].append({"role": "assistant", "content": err_msg})
