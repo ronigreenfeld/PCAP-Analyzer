@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Virtual Envs
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Streamlit config / credentials
+.streamlit/secrets.toml
+
+# Operating System & IDE files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# Large captures & logs (keep sample.pcap and sample.pcapng tracked)
+*.log
+tmp/
+temp/
+
