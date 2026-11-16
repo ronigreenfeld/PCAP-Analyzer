@@ -49,8 +49,33 @@ pcap_analyzer/
 ├── .gitignore          # Git exclusion rules (.env, __pycache__, virtual environments)
 ├── .env.example        # Environment variable template for GEMINI_API_KEY
 ├── README.md           # Project documentation and setup guide
-└── TESTING_GUIDE.md    # Step-by-step verification guide for all 5 assignment test cases
+├── TESTING_GUIDE.md    # Step-by-step verification guide for all 5 assignment test cases
+└── screenshots/        # Application interface walkthrough images
 ```
+
+---
+
+## Visual Walkthrough & Screenshots
+
+### 1. Capture Overview & Protocol Distribution
+Baseline packet counts, capture duration, protocol breakdown (Plotly donut chart), and top active IP endpoints (Top Talkers).
+
+![Dashboard Overview](screenshots/01_dashboard_overview.png)
+
+### 2. Reassembled HTTP Transactions & Visual Error Highlighting
+Reconstructed HTTP sessions matching Requests to Responses with response times, TCP 4-tuples, frame numbers, and colored status code indicators (green for 2xx, yellow for 3xx, red for 4xx/5xx).
+
+![HTTP Transactions Table](screenshots/02_http_transactions_table.png)
+
+### 3. Deep Transaction Inspector
+Deep inspection of any transaction displaying full request/response headers, decoded JSON payloads, and TCP connection parameters.
+
+![Transaction Inspector](screenshots/03_transaction_inspector.png)
+
+### 4. AI Q&A Assistant with Strict Evidence Citations
+Grounded natural language Q&A powered by Google Gemini (RAG). The assistant answers user queries strictly from the structured dataset and cites exact Request/Response Frame Numbers as evidence.
+
+![AI Assistant Q&A](screenshots/04_ai_assistant_qa.png)
 
 ---
 

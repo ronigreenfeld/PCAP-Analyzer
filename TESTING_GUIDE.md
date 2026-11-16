@@ -42,6 +42,8 @@ Identify the HTTP request with the highest round-trip latency in the capture.
 - Response Frame Number: `#17`
 - Status Code: `404 Not Found`
 
+![Slowest Request Verification](screenshots/04_ai_assistant_qa.png)
+
 ---
 
 ## Test Case 2: Filtering Requests by Host
@@ -99,6 +101,8 @@ Locate and analyze transactions returning a target status code (e.g., `404 Not F
 - Client / Server: `192.168.1.100:50888` -> `198.51.100.12:80`
 - Frames: Request `#16`, Response `#17`
 
+![Status Code Highlighting](screenshots/02_http_transactions_table.png)
+
 ---
 
 ## Test Case 4: Explaining a Specific Transaction or TCP Stream
@@ -124,6 +128,8 @@ Examine the lifecycle and payload of a specific TCP connection, explaining why a
 - Client sent payment checkout payload at Request Frame `#14`.
 - Server responded at Response Frame `#15` after 420.0 ms with status `500 Internal Server Error`.
 - Response body confirms the cause: `"Database connection timeout during payment"`.
+
+![Deep Transaction Inspector Verification](screenshots/03_transaction_inspector.png)
 
 ---
 
