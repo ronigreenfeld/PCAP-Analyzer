@@ -27,7 +27,7 @@ flowchart TD
     subgraph GeminiAI ["Google Gemini Cloud API"]
         G --> H["Prompt Construction: System Rules + JSON Data + Query"]
         UserQuery["User Question (English or Hebrew)"] --> H
-        H --> Model["Gemini Model (gemini-2.5-flash)"]
+        H --> Model["Gemini Model (gemini-3-flash-preview)"]
         Model --> Answer["Grounded Response (Citing Frame # & Timestamps)"]
     end
 
@@ -86,8 +86,9 @@ Grounded natural language Q&A powered by Google Gemini (RAG). The assistant answ
    - Computes total packet count, capture start/end timestamps, and duration.
    - Displays protocol breakdown (Plotly chart) and most active IP endpoints (Top Talkers).
 
-2. **HTTP Transaction Reassembly:**
-   - Maps HTTP requests to matching responses using TCP 4-tuple stream tracking and FIFO session queues.
+2. **HTTP Transaction Reassembly & TCP Stream Tracking:**
+   - Maps HTTP requests to matching responses using TCP 4-tuple stream tracking and Content-Length reassembly.
+   - Multi-segment TCP awareness: accurately identifies both initial response header frame (TTFB) and final reassembled completion frame (matching Wireshark).
    - Extracts: Method, URI, Host, Source/Destination IPs & Ports, Status Code, Response Time (ms), Request Frame Number, and Response Frame Number.
    - Full header and payload inspection in an expandable viewer.
 
@@ -98,8 +99,9 @@ Grounded natural language Q&A powered by Google Gemini (RAG). The assistant answ
 
 4. **Bilingual AI Q&A Engine (Google Gemini RAG):**
    - Natural language queries supported in both English and Hebrew.
+   - Powered by modern `google-genai` SDK with `gemini-3-flash-preview`.
    - Strict system grounding: answers are derived exclusively from the structured JSON dataset.
-   - Mandatory evidence citation: the model cites exact Request/Response Frame Numbers and timestamps for every claim.
+   - Mandatory evidence citation: the model cites exact Request and Response Frame Numbers (with multi-segment TCP reassembly details) and timestamps for every claim.
    - Zero hallucination policy: explicitly reports when queried files, protocols, or entities are absent.
 
 ---
