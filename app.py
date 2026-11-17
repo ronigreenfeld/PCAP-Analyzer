@@ -6,6 +6,7 @@ only structured JSON/Markdown context is passed to the Gemini LLM.
 
 import os
 import tempfile
+import importlib
 from dotenv import load_dotenv
 import pandas as pd
 import plotly.express as px
@@ -13,6 +14,8 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
+import pcap_parser
+importlib.reload(pcap_parser)
 from pcap_parser import parse_pcap, serialize_transactions_for_rag
 
 # Load environment variables from .env if present (force reload to pick up changes)
@@ -129,8 +132,14 @@ with st.sidebar:
     )
 
     if uploaded_file is not None:
+        # Allow force re-analyzing the file
+        if st.button("🔄 Re-process Uploaded File", use_container_width=True):
+            file_bytes = uploaded_file.getvalue()
+            process_pcap_file(file_bytes, uploaded_file.name)
+            st.rerun()
+
         if st.session_state["loaded_file_name"] != uploaded_file.name:
-            file_bytes = uploaded_file.read()
+            file_bytes = uploaded_file.getvalue()
             process_pcap_file(file_bytes, uploaded_file.name)
 
     sample_pcap_path = os.path.join(os.path.dirname(__file__), "sample.pcap")
@@ -336,7 +345,7 @@ if filtered_txs:
             "Client": f"{t['src_ip']}:{t['src_port']}",
             "Server": f"{t['dst_ip']}:{t['dst_port']}",
             "Req Frame #": t["req_frame_num"],
-            "Resp Frame #": t["resp_frame_num"],
+            "Resp Frame #": t.get("resp_frame_display", str(t["resp_frame_num"])),
         })
     df_display = pd.DataFrame(table_rows)
 
@@ -353,7 +362,7 @@ if filtered_txs:
             "Status Code": st.column_config.NumberColumn(width="small"),
             "Response Time (ms)": st.column_config.NumberColumn(format="%.1f ms"),
             "Req Frame #": st.column_config.NumberColumn(width="small"),
-            "Resp Frame #": st.column_config.NumberColumn(width="small"),
+            "Resp Frame #": st.column_config.TextColumn(width="medium"),
         }
     )
 else:
@@ -387,7 +396,8 @@ if transactions:
         c3.write(f"**Response Time:** `{sel_tx['response_time_ms']} ms` ({sel_tx['response_time_sec']}s)")
         c3.write(f"**Error Flag:** `{'🚨 Yes (4xx/5xx)' if sel_tx['is_error'] else '✅ No'}`")
         c4.write(f"**Request Frame:** `#{sel_tx['req_frame_num']}`")
-        c4.write(f"**Response Frame:** `#{sel_tx['resp_frame_num']}`")
+        resp_disp = sel_tx.get('resp_frame_display', str(sel_tx['resp_frame_num']))
+        c4.write(f"**Response Frame:** `#{resp_disp}`")
         st.write(f"**Full URI:** `{sel_tx['uri']}`")
 
     with tab_req:
@@ -405,7 +415,10 @@ if transactions:
             st.caption("Empty body.")
 
     with tab_resp:
-        st.markdown(f"**Response Timestamp:** `{sel_tx['resp_timestamp']}` (Frame `#{sel_tx['resp_frame_num']}`)")
+        resp_info = f"Frame `#{sel_tx['resp_frame_num']}`"
+        if sel_tx.get('resp_start_frame') and sel_tx.get('resp_start_frame') != sel_tx.get('resp_end_frame'):
+            resp_info += f" (Headers arrived in Frame `#{sel_tx['resp_start_frame']}`, completed in Frame `#{sel_tx['resp_end_frame']}` across {sel_tx.get('resp_segments_count', 1)} TCP segments)"
+        st.markdown(f"**Response Timestamp:** `{sel_tx['resp_timestamp']}` ({resp_info})")
         st.write("**Response Headers:**")
         if sel_tx["resp_headers"]:
             st.json(sel_tx["resp_headers"])
@@ -484,7 +497,10 @@ if user_query:
                         "You are provided with a structured JSON dataset containing capture metrics and extracted HTTP transactions.\n\n"
                         "STRICT GROUNDING & EVIDENCE RULES:\n"
                         "1. All your statements MUST be based strictly and exclusively on the provided HTTP transactions and summary JSON block.\n"
-                        "2. You MUST cite the specific 'req_frame' / 'resp_frame' (Frame Numbers) and/or exact timestamps as concrete evidence for every transaction you discuss.\n"
+                        "2. FRAME CITATIONS & TCP REASSEMBLY ACCURACY:\n"
+                        "   - For every request, cite 'req_frame' (e.g. Frame #3247).\n"
+                        "   - For every response, cite 'resp_frame' / 'resp_end_frame' (e.g. Frame #3260, which matches Wireshark's reassembled display).\n"
+                        "   - Whenever a response spanned multiple TCP segments ('resp_start_frame' != 'resp_end_frame'), ALWAYS explicitly state both frames for maximum technical depth: explain that the HTTP status line/headers arrived in Frame #resp_start_frame (e.g. #3259) and the full payload completed in Frame #resp_end_frame (e.g. #3260) across the reported number of TCP segments.\n"
                         "3. NEVER fabricate or hallucinate transactions, files, hosts, IPs, or protocol events not present in the provided JSON data.\n"
                         "4. If the user asks about a file, protocol, or event that does NOT exist in the capture data (for example: SSH packets, files not requested, unknown users), you MUST explicitly state that it was not found in the capture data.\n"
                         "5. Provide crisp, technically accurate answers with markdown tables or bullet points where appropriate.\n"

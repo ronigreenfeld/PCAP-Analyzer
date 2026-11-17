@@ -107,10 +107,62 @@ def parse_pcap(filepath: str) -> Dict[str, Any]:
     # Session tracking: stream_key -> deque of pending requests
     # stream_key = (min(endpointA, endpointB), max(endpointA, endpointB))
     pending_requests: Dict[Tuple, deque] = defaultdict(deque)
+    active_responses: Dict[Tuple, Dict[str, Any]] = {}
     completed_transactions: List[Dict[str, Any]] = []
 
     # Stream counters
     stream_packet_counts: Dict[str, int] = defaultdict(int)
+
+    def _finalize_transaction(act_resp: Dict[str, Any]):
+        req_obj = act_resp["req"]
+        end_time = act_resp["last_time"]
+        response_time = max(0.0, end_time - req_obj["timestamp"])
+        response_time_ms = round(response_time * 1000.0, 2)
+        trans_id = len(completed_transactions) + 1
+        status_code = act_resp["status_code"]
+        is_error = bool(status_code and status_code >= 400)
+
+        start_f = act_resp["start_frame"]
+        end_f = act_resp["end_frame"]
+        seg_count = len(act_resp["segments"])
+        display_frame = f"{end_f} (starts #{start_f})" if end_f != start_f else str(end_f)
+
+        body_str = None
+        if act_resp.get("body_bytes"):
+            try:
+                body_str = act_resp["body_bytes"].decode("utf-8")
+            except UnicodeDecodeError:
+                body_str = f"<Binary data: {len(act_resp['body_bytes'])} bytes>"
+
+        transaction = {
+            "transaction_id": trans_id,
+            "method": req_obj["method"],
+            "uri": req_obj["uri"],
+            "host": req_obj["host"] or f"{req_obj['dst_ip']}:{req_obj['dst_port']}",
+            "src_ip": req_obj["src_ip"],
+            "dst_ip": req_obj["dst_ip"],
+            "src_port": req_obj["src_port"],
+            "dst_port": req_obj["dst_port"],
+            "status_code": status_code,
+            "reason_phrase": act_resp.get("reason_phrase", ""),
+            "response_time_sec": round(response_time, 4),
+            "response_time_ms": response_time_ms,
+            "req_frame_num": req_obj["frame_num"],
+            "resp_frame_num": end_f,  # Wireshark-compatible reassembled frame
+            "resp_start_frame": start_f,  # First segment with HTTP status/headers
+            "resp_end_frame": end_f,  # Last segment completing the message
+            "resp_segments_count": seg_count,
+            "resp_frame_display": display_frame,
+            "req_timestamp": req_obj["formatted_time"],
+            "resp_timestamp": datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if end_time else "",
+            "is_error": is_error,
+            "tcp_stream_id": req_obj["stream_id"],
+            "req_headers": req_obj["headers"],
+            "resp_headers": act_resp.get("headers", {}),
+            "req_body": req_obj["body"],
+            "resp_body": body_str,
+        }
+        completed_transactions.append(transaction)
 
     with PcapReader(filepath) as reader:
         for frame_num, pkt in enumerate(reader, start=1):
@@ -176,6 +228,29 @@ def parse_pcap(filepath: str) -> Dict[str, Any]:
             stream_id = f"{stream_key[0][0]}:{stream_key[0][1]} <-> {stream_key[1][0]}:{stream_key[1][1]}"
             stream_packet_counts[stream_id] += 1
 
+            sender_endpoint = (src_ip, sport)
+            raw_payload = pkt[scapy.Raw].load if pkt.haslayer(scapy.Raw) else b""
+            tcp_flags = str(pkt[TCP].flags) if hasattr(pkt[TCP], "flags") else ""
+
+            # Check if this packet continues an active multi-segment response
+            if stream_key in active_responses and sender_endpoint == active_responses[stream_key]["server_endpoint"]:
+                act = active_responses[stream_key]
+                if raw_payload:
+                    act["body_bytes"] += raw_payload
+                    act["segments"].append(frame_num)
+                    act["last_time"] = pkt_time
+
+                needed = act["expected_body_len"]
+                is_push = "P" in tcp_flags
+                is_fin = "F" in tcp_flags or "R" in tcp_flags
+                # Response completes when expected bytes arrived, or on TCP PUSH / FIN
+                if (needed > 0 and len(act["body_bytes"]) >= needed) or is_push or is_fin:
+                    act["end_frame"] = frame_num
+                    act["last_time"] = pkt_time
+                    _finalize_transaction(act)
+                    del active_responses[stream_key]
+                    continue
+
             # Detect HTTP Request or Response
             http_type = None
             http_layer = None
@@ -187,7 +262,7 @@ def parse_pcap(filepath: str) -> Dict[str, Any]:
                 http_type = "response"
                 http_layer = pkt[HTTPResponse]
             elif pkt.haslayer(scapy.Raw):
-                http_type, http_layer = _check_raw_http(pkt[scapy.Raw].load)
+                http_type, http_layer = _check_raw_http(raw_payload)
 
             if http_type == "request" and http_layer is not None:
                 method = _decode_bytes(getattr(http_layer, "Method", "GET")).upper()
@@ -228,42 +303,44 @@ def parse_pcap(filepath: str) -> Dict[str, Any]:
 
                 reason_phrase = _decode_bytes(reason_raw) if reason_raw else ""
                 resp_headers = _extract_headers(http_layer)
-                resp_body = _extract_body(pkt if pkt.haslayer(scapy.Raw) else http_layer)
 
-                # Match with pending request on this stream (FIFO)
+                # Check Content-Length for multi-segment TCP reassembly
+                content_len = 0
+                if "Content-Length" in resp_headers:
+                    try:
+                        content_len = int(resp_headers["Content-Length"])
+                    except Exception:
+                        content_len = 0
+
+                initial_body = raw_payload
+
                 if pending_requests[stream_key]:
                     req_obj = pending_requests[stream_key].popleft()
-                    response_time = max(0.0, pkt_time - req_obj["timestamp"])
-                    response_time_ms = round(response_time * 1000.0, 2)
 
-                    trans_id = len(completed_transactions) + 1
-                    is_error = bool(status_code and status_code >= 400)
-
-                    transaction = {
-                        "transaction_id": trans_id,
-                        "method": req_obj["method"],
-                        "uri": req_obj["uri"],
-                        "host": req_obj["host"] or f"{req_obj['dst_ip']}:{req_obj['dst_port']}",
-                        "src_ip": req_obj["src_ip"],
-                        "dst_ip": req_obj["dst_ip"],
-                        "src_port": req_obj["src_port"],
-                        "dst_port": req_obj["dst_port"],
+                    act = {
+                        "req": req_obj,
                         "status_code": status_code,
                         "reason_phrase": reason_phrase,
-                        "response_time_sec": round(response_time, 4),
-                        "response_time_ms": response_time_ms,
-                        "req_frame_num": req_obj["frame_num"],
-                        "resp_frame_num": frame_num,
-                        "req_timestamp": req_obj["formatted_time"],
-                        "resp_timestamp": datetime.datetime.fromtimestamp(pkt_time).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if pkt_time else "",
-                        "is_error": is_error,
-                        "tcp_stream_id": stream_id,
-                        "req_headers": req_obj["headers"],
-                        "resp_headers": resp_headers,
-                        "req_body": req_obj["body"],
-                        "resp_body": resp_body,
+                        "headers": resp_headers,
+                        "server_endpoint": (src_ip, sport),
+                        "start_frame": frame_num,
+                        "end_frame": frame_num,
+                        "segments": [frame_num],
+                        "expected_body_len": content_len,
+                        "body_bytes": initial_body,
+                        "start_time": pkt_time,
+                        "last_time": pkt_time,
                     }
-                    completed_transactions.append(transaction)
+
+                    # If entire body fit into first segment, finalize immediately
+                    if content_len == 0 or len(initial_body) >= content_len or ("P" in tcp_flags and len(initial_body) > 0 and len(initial_body) >= content_len):
+                        _finalize_transaction(act)
+                    else:
+                        active_responses[stream_key] = act
+
+    # Finalize any remaining active responses at end of capture
+    for stream_key, act in list(active_responses.items()):
+        _finalize_transaction(act)
 
     # Format summary stats
     start_str = datetime.datetime.fromtimestamp(first_timestamp).strftime("%Y-%m-%d %H:%M:%S") if first_timestamp else "N/A"
@@ -312,6 +389,14 @@ def serialize_transactions_for_rag(transactions: List[Dict[str, Any]], summary: 
             "response_time_ms": tx["response_time_ms"],
             "req_frame": tx["req_frame_num"],
             "resp_frame": tx["resp_frame_num"],
+            "resp_start_frame": tx.get("resp_start_frame", tx["resp_frame_num"]),
+            "resp_end_frame": tx.get("resp_end_frame", tx["resp_frame_num"]),
+            "resp_tcp_segments": tx.get("resp_segments_count", 1),
+            "resp_frame_details": (
+                f"Completed in Frame #{tx['resp_end_frame']} (headers arrived in Frame #{tx['resp_start_frame']}, spanned {tx.get('resp_segments_count', 1)} TCP segments)"
+                if tx.get("resp_start_frame") and tx.get("resp_start_frame") != tx.get("resp_end_frame")
+                else f"Frame #{tx['resp_frame_num']}"
+            ),
             "req_time": tx["req_timestamp"],
             "resp_time": tx["resp_timestamp"],
             "client": f"{tx['src_ip']}:{tx['src_port']}",
